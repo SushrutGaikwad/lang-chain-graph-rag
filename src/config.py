@@ -35,7 +35,7 @@ GENERATION_TEMPERATURE: float = 0.2
 MAX_OUTPUT_TOKENS: int = 1024
 
 # --- Prompt Versioning ---
-ACTIVE_PROMPT_VERSION: str = "v1"
+ACTIVE_PROMPT_VERSION: str = "v2"
 ACTIVE_PROMPT_PATH: Path = PROMPTS_DIR / "rag" / f"{ACTIVE_PROMPT_VERSION}.yaml"
 
 # --- Phase 2: Hybrid Retrieval ---
