@@ -49,3 +49,8 @@ HYBRID_WEIGHTS: dict[str, float] = {
 # --- Phase 2: Reranking ---
 RERANK_INITIAL_K: int = 20  # total candidates before reranking
 RERANK_FINAL_K: int = 5  # results after reranking
+
+# --- Phase 3: Evaluation ---
+EVALUATOR_MODEL: str = "claude-opus-4-6"
+EVALUATOR_TEMPERATURE: float = 0.0
+FAITHFULNESS_THRESHOLD: float = 0.7  # CI fails below this
