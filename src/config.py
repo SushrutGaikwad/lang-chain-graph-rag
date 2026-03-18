@@ -37,3 +37,15 @@ MAX_OUTPUT_TOKENS: int = 1024
 # --- Prompt Versioning ---
 ACTIVE_PROMPT_VERSION: str = "v1"
 ACTIVE_PROMPT_PATH: Path = PROMPTS_DIR / "rag" / f"{ACTIVE_PROMPT_VERSION}.yaml"
+
+# --- Phase 2: Hybrid Retrieval ---
+BM25_K: int = 20  # candidates from BM25
+VECTOR_K: int = 20  # candidates from vector search
+HYBRID_WEIGHTS: dict[str, float] = {
+    "vector": 0.6,
+    "bm25": 0.4,
+}
+
+# --- Phase 2: Reranking ---
+RERANK_INITIAL_K: int = 20  # total candidates before reranking
+RERANK_FINAL_K: int = 5  # results after reranking
