@@ -32,7 +32,7 @@ TOP_K: int = 5
 # --- Generation ---
 GENERATION_MODEL: str = "gemini-2.5-flash"
 GENERATION_TEMPERATURE: float = 0.2
-MAX_OUTPUT_TOKENS: int = 1024
+MAX_OUTPUT_TOKENS: int = 4096
 
 # --- Prompt Versioning ---
 ACTIVE_PROMPT_VERSION: str = "v2"
