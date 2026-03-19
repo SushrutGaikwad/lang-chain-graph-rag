@@ -5,7 +5,9 @@ A production-grade Retrieval-Augmented Generation (RAG) pipeline built on LangCh
 > **Detailed technical writeup:** [Read the full blog post here](https://sushrutgaikwad.github.io/projects/published/production-level-langchain-langgraph-rag/).
 > **Golden dataset generator:** The Phase 0 dataset generation code lives in a [separate repository](https://github.com/SushrutGaikwad/golden-dataset-generator-for-lang-chain-graph-rag).
 
-<img src="assets/demo.gif" alt="Chatbot Demo" width="800">
+<div align="center">
+  <img src="assets/demo.gif" alt="Chatbot Demo" width="800">
+</div>
 
 ## Highlights
 
