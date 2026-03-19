@@ -1,0 +1,66 @@
+name: CI - Tests & Quality Gate
+
+on:
+    push:
+        branches: [main]
+    pull_request:
+        branches: [main]
+
+jobs:
+    test:
+        name: Run Unit Tests
+        runs-on: ubuntu-latest
+
+        steps:
+            - name: Checkout repository
+              uses: actions/checkout@v4
+
+            - name: Install uv
+              uses: astral-sh/setup-uv@v4
+              with:
+                  version: "latest"
+
+            - name: Set up Python
+              run: uv python install 3.12
+
+            - name: Install dependencies
+              run: uv sync --dev
+
+            - name: Run unit tests
+              run: uv run pytest tests/ -v --tb=short
+
+            # ─────────────────────────────────────────────────────────────
+            # RAGAS Evaluation with Claude Opus 4.6
+            # ─────────────────────────────────────────────────────────────
+            # The full evaluation pipeline runs all 102 golden dataset
+            # questions through the RAG pipeline (Google Gemini 2.5 Flash)
+            # and scores them using RAGAS with Claude Opus 4.6 (Anthropic).
+            #
+            # This step is commented out because it:
+            #   - Requires API keys for OpenAI, Google, and Anthropic
+            #   - Makes ~100 Gemini calls + ~400 Claude Opus 4.6 calls
+            #   - Takes 30-60 minutes to complete
+            #   - Costs several dollars per run
+            #
+            # To enable, uncomment the step below and add these secrets
+            # to your GitHub repository settings:
+            #   - OPENAI_API_KEY
+            #   - GOOGLE_API_KEY
+            #   - ANTHROPIC_API_KEY
+            #
+            # The CI script exits with code 1 if any RAGAS metric
+            # (faithfulness, answer_relevancy, context_precision,
+            # context_recall) drops below the 0.7 threshold.
+            # ─────────────────────────────────────────────────────────────
+            #
+            # - name: Run ingestion pipeline
+            #   env:
+            #     OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+            #   run: uv run python -m scripts.ingest
+            #
+            # - name: Run RAGAS evaluation
+            #   env:
+            #     OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+            #     GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+            #     ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+            #   run: uv run python -m scripts.ci_eval

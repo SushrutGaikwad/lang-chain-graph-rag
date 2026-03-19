@@ -13,7 +13,7 @@ class TestPromptLoader:
     def test_loads_default_prompt(self) -> None:
         """Should load the active prompt version without errors."""
         loader = PromptLoader()
-        assert loader.version == "v1"
+        assert loader.version == "v2"
         assert len(loader.template) > 0
 
     def test_template_has_placeholders(self) -> None:
