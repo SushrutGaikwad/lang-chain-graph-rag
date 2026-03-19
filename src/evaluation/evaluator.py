@@ -3,16 +3,17 @@
 import json
 from pathlib import Path
 
-from langchain_anthropic import ChatAnthropic
-from langchain_openai import OpenAIEmbeddings
-from ragas import evaluate
+from anthropic import AsyncAnthropic
+from openai import AsyncOpenAI
 from ragas.metrics.collections import (
-    faithfulness,
-    answer_relevancy,
-    context_precision,
-    context_recall,
+    Faithfulness,
+    AnswerRelevancy,
+    ContextPrecision,
+    ContextRecall,
 )
-from ragas import EvaluationDataset, SingleTurnSample
+from ragas.llms import llm_factory
+from ragas.embeddings import embedding_factory
+from ragas import EvaluationDataset, SingleTurnSample, evaluate
 from loguru import logger
 from dotenv import load_dotenv
 
@@ -21,12 +22,40 @@ from src.config import (
     EVALUATOR_MODEL,
     EVALUATOR_TEMPERATURE,
     EMBEDDING_MODEL,
-    EMBEDDING_DIMENSIONS,
     FAITHFULNESS_THRESHOLD,
 )
 from src.pipeline.rag_chain_v2 import RAGPipelineV2, RAGResult
 
 load_dotenv()
+
+
+def _build_evaluator_llm():
+    """Build a RAGAS-compatible async LLM for Claude Opus 4.6.
+
+    Patches model_args to remove top_p, which conflicts with
+    temperature on the Anthropic API.
+    """
+    client = AsyncAnthropic()
+    llm = llm_factory(
+        EVALUATOR_MODEL,
+        provider="anthropic",
+        client=client,
+    )
+    # Anthropic API rejects requests with both temperature and top_p
+    llm.model_args.pop("top_p", None)
+    llm.model_args["temperature"] = EVALUATOR_TEMPERATURE
+    llm.model_args["max_tokens"] = 4096
+    return llm
+
+
+def _build_evaluator_embeddings():
+    """Build RAGAS-compatible async embeddings for answer relevancy metric."""
+    client = AsyncOpenAI()
+    return embedding_factory(
+        "openai",
+        model=EMBEDDING_MODEL,
+        client=client,
+    )
 
 
 class RAGEvaluator:
@@ -46,18 +75,11 @@ class RAGEvaluator:
         self.pipeline = pipeline or RAGPipelineV2()
         self.golden_dataset_path = golden_dataset_path
 
-        # Evaluator LLM (Claude Opus 4.6)
-        self.evaluator_llm = ChatAnthropic(
-            model=EVALUATOR_MODEL,
-            temperature=EVALUATOR_TEMPERATURE,
-        )
+        self.evaluator_llm = _build_evaluator_llm()
         logger.info(f"Initialized evaluator LLM: {EVALUATOR_MODEL}")
 
-        # Embeddings for RAGAS metrics that need them
-        self.evaluator_embeddings = OpenAIEmbeddings(
-            model=EMBEDDING_MODEL,
-            dimensions=EMBEDDING_DIMENSIONS,
-        )
+        self.evaluator_embeddings = _build_evaluator_embeddings()
+        logger.info("Initialized evaluator embeddings")
 
     def load_golden_dataset(self) -> list[dict]:
         """Load the golden dataset from JSON.
@@ -158,33 +180,102 @@ class RAGEvaluator:
         )
         return EvaluationDataset(samples=samples)
 
+    def _build_metrics(self) -> list:
+        """Build RAGAS metric instances with the evaluator LLM."""
+        return [
+            Faithfulness(llm=self.evaluator_llm),
+            AnswerRelevancy(
+                llm=self.evaluator_llm, embeddings=self.evaluator_embeddings
+            ),
+            ContextPrecision(llm=self.evaluator_llm),
+            ContextRecall(llm=self.evaluator_llm),
+        ]
+
     def run_evaluation(self, ragas_dataset: EvaluationDataset) -> dict:
-        """Run RAGAS evaluation metrics.
+        """Run RAGAS evaluation metrics by scoring each sample directly.
 
         Args:
             ragas_dataset: The RAGAS EvaluationDataset.
 
         Returns:
-            Dictionary of metric scores.
+            Dictionary of average metric scores.
         """
         logger.info("Running RAGAS evaluation with Claude Opus 4.6...")
 
-        metrics = [faithfulness, answer_relevancy, context_precision, context_recall]
+        metrics = self._build_metrics()
+        samples = ragas_dataset.samples
+        total = len(samples)
 
-        result = evaluate(
-            dataset=ragas_dataset,
-            metrics=metrics,
-            llm=self.evaluator_llm,
-            embeddings=self.evaluator_embeddings,
-        )
-
-        scores = result.to_pandas()
-        avg_scores = {
-            "faithfulness": float(scores["faithfulness"].mean()),
-            "answer_relevancy": float(scores["answer_relevancy"].mean()),
-            "context_precision": float(scores["context_precision"].mean()),
-            "context_recall": float(scores["context_recall"].mean()),
+        # Collect per-sample scores for each metric
+        all_scores: dict[str, list[float]] = {
+            "faithfulness": [],
+            "answer_relevancy": [],
+            "context_precision": [],
+            "context_recall": [],
         }
+
+        async def _score_sample(idx: int, sample: SingleTurnSample) -> dict[str, float]:
+            """Score a single sample across all metrics with correct kwargs per metric."""
+            sample_scores: dict[str, float] = {}
+
+            # Each metric has a different signature
+            metric_kwargs = {
+                "faithfulness": {
+                    "user_input": sample.user_input,
+                    "response": sample.response,
+                    "retrieved_contexts": sample.retrieved_contexts,
+                },
+                "answer_relevancy": {
+                    "user_input": sample.user_input,
+                    "response": sample.response,
+                },
+                "context_precision": {
+                    "user_input": sample.user_input,
+                    "reference": sample.reference,
+                    "retrieved_contexts": sample.retrieved_contexts,
+                },
+                "context_recall": {
+                    "user_input": sample.user_input,
+                    "retrieved_contexts": sample.retrieved_contexts,
+                    "reference": sample.reference,
+                },
+            }
+
+            for metric in metrics:
+                metric_name = metric.name
+                kwargs = metric_kwargs.get(metric_name, {})
+                try:
+                    result = await metric.ascore(**kwargs)
+                    sample_scores[metric_name] = float(result.value)
+                except Exception as e:
+                    logger.warning(
+                        f"Metric '{metric_name}' failed on sample {idx + 1}: {e}"
+                    )
+                    sample_scores[metric_name] = 0.0
+            return sample_scores
+
+        async def _run_all() -> None:
+            """Score all samples sequentially."""
+            for idx, sample in enumerate(samples):
+                logger.info(f"Scoring sample {idx + 1}/{total}...")
+                sample_scores = await _score_sample(idx, sample)
+                for metric_name, score in sample_scores.items():
+                    if metric_name in all_scores:
+                        all_scores[metric_name].append(score)
+                logger.info(
+                    f"  Sample {idx + 1} scores: "
+                    + ", ".join(f"{k}={v:.4f}" for k, v in sample_scores.items())
+                )
+
+        import asyncio
+
+        asyncio.run(_run_all())
+
+        # Compute averages
+        avg_scores = {}
+        for metric_name, scores_list in all_scores.items():
+            avg = sum(scores_list) / len(scores_list) if scores_list else 0.0
+            avg_scores[metric_name] = avg
 
         logger.info("RAGAS evaluation results:")
         for metric, score in avg_scores.items():
@@ -192,47 +283,6 @@ class RAGEvaluator:
             logger.info(f"  {metric}: {score:.4f} [{status}]")
 
         return avg_scores
-
-    def evaluate_by_question_type(
-        self, results: list[dict], ragas_dataset: EvaluationDataset
-    ) -> dict[str, dict]:
-        """Break down RAGAS scores by question type.
-
-        Args:
-            results: The original pipeline results with question_type.
-            ragas_dataset: The evaluated RAGAS dataset.
-
-        Returns:
-            Dictionary mapping question_type to average metric scores.
-        """
-        scores_df = evaluate(
-            dataset=ragas_dataset,
-            metrics=[faithfulness, answer_relevancy],
-            llm=self.evaluator_llm,
-            embeddings=self.evaluator_embeddings,
-        ).to_pandas()
-
-        # Map back to question types (only non-declined results are in the dataset)
-        non_declined = [r for r in results if not r["declined"]]
-        scores_df["question_type"] = [r["question_type"] for r in non_declined]
-
-        type_scores: dict[str, dict] = {}
-        for qtype in scores_df["question_type"].unique():
-            subset = scores_df[scores_df["question_type"] == qtype]
-            type_scores[qtype] = {
-                "count": len(subset),
-                "faithfulness": float(subset["faithfulness"].mean()),
-                "answer_relevancy": float(subset["answer_relevancy"].mean()),
-            }
-
-        logger.info("Scores by question type:")
-        for qtype, metrics in sorted(type_scores.items()):
-            logger.info(
-                f"  {qtype}: faithfulness={metrics['faithfulness']:.4f}, "
-                f"relevancy={metrics['answer_relevancy']:.4f} (n={metrics['count']})"
-            )
-
-        return type_scores
 
     def save_results(
         self,
