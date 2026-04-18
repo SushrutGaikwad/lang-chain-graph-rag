@@ -14,3 +14,6 @@ wheels/
 
 # Vector DB
 data/chroma_db/
+
+# Tree
+tree.py
