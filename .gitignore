@@ -13,7 +13,7 @@ wheels/
 .env
 
 # Vector DB
-data/chroma_db/
+# data/chroma_db/
 
 # Tree
 tree.py
